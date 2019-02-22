@@ -1,0 +1,68 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "scan with path ntfsundelete",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "/bin/bash",
+            "args": ["${workspaceFolder}/ntfsprogs/ntfsundelete", "/dev/sdb2","--force", "-A"],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "miDebuggerPath": "${workspaceFolder}/.vscode/sugdb",
+            "setupCommands": [
+                {  
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ]
+        },
+        {
+            "name": "recurse scan directory ntfsundelete",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "/bin/bash",
+            "args": ["${workspaceFolder}/ntfsprogs/ntfsundelete", "/dev/sdb2","--force", "-A", "-r 981650"],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "miDebuggerPath": "${workspaceFolder}/.vscode/sugdb",
+            "setupCommands": [
+                {  
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ]
+        },
+        {
+            "name": "undelete directory ntfsundelete",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "/bin/bash",
+            "args": ["${workspaceFolder}/ntfsprogs/ntfsundelete", "/dev/sdb2","--force", "-A", "-u", "-r 91245", "-d /mnt/fgderweiterung/undel/recovtest/jw10/"],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "miDebuggerPath": "${workspaceFolder}/.vscode/sugdb",
+            "setupCommands": [
+                {  
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ]
+        }
+    ]
+}

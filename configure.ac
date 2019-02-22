@@ -47,6 +47,13 @@ AC_ARG_ENABLE(
 )
 
 AC_ARG_ENABLE(
+	[unoptimized],
+	[AS_HELP_STRING([--enable-unoptimized],[enable unoptimized code for deterministic debugging])],
+	,
+	[enable_unoptimized="no"]
+)
+
+AC_ARG_ENABLE(
 	[warnings],
 	[AS_HELP_STRING([--enable-warnings],[enable lots of compiler warnings])],
 	,
@@ -568,12 +575,16 @@ if test "${enable_warnings}" = "yes"; then
 fi
 
 if test "${enable_debug}" = "yes"; then
-	CFLAGS="${CFLAGS} -ggdb3 -DDEBUG"
+	CFLAGS="${CFLAGS} -ggdb3 -O0 -DDEBUG"
 	AC_DEFINE(
 		[ENABLE_DEBUG],
 		[1],
 		[Define to 1 if debug should be enabled]
 	)
+fi
+
+if test "${enable_unoptimized}" = "yes"; then
+	CFLAGS="${CFLAGS} -ggdb3 -O0"
 fi
 
 test "${enable_device_default_io_ops}" = "no" && AC_DEFINE(

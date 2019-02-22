@@ -53,6 +53,8 @@ struct options {
 	int		 force;		/* Override common sense */
 	int              optimistic;    /* Undelete in-use clusters as well */
 	int		 parent;	/* Show parent directory */
+	int		 ancestors; /* Show Ancestors as absolute path */
+	int		 recursive; /* recover folder inodes with content recursively */
 	time_t		 since;		/* Since this time */
 	s64		 size_begin;	/* Range for file size */
 	s64		 size_end;
@@ -76,6 +78,8 @@ struct filename {
 	FILE_NAME_TYPE_FLAGS name_space;
 	leMFT_REF	 parent_mref;
 	char		*parent_name;
+	int			 ancestor_ids[130]; // that is 130 folders  TODO: make this dynamic
+	char		*ancestor_names[130];  // for each ancestor a name pointer
 };
 
 struct data {
@@ -100,6 +104,7 @@ struct ufile {
 	time_t		 date;		/* Last modification date/time */
 	struct ntfs_list_head name;	/* A list of filenames */
 	struct ntfs_list_head data;	/* A list of data streams */
+	struct filename *ptpref_name;	/* pointer to the prefered name structure */
 	char		*pref_name;	/* Preferred filename */
 	char		*pref_pname;	/*	     parent filename */
 	long long	 max_size;	/* Largest size we find */

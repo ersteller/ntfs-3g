@@ -392,7 +392,8 @@ static void version(void)
 			"Copyright (c) 2004-2005 Holger Ohmacht\n"
 			"Copyright (c) 2005      Anton Altaparmakov\n"
 			"Copyright (c) 2007      Yura Pakhuchiy\n"
-			"Copyright (c) 2013-2014 Jean-Pierre Andre\n");
+			"Copyright (c) 2013-2014 Jean-Pierre Andre\n"
+			"modified                Jan Adam-Kostrzewski\n");
 	ntfs_log_info("\n%s\n%s%s\n", ntfs_gpl, ntfs_bugs, ntfs_home);
 }
 
@@ -422,6 +423,8 @@ static void usage(void)
 		"    -b, --byte NUM         Fill missing parts with this byte\n"
 		"    -T, --truncate         Truncate 100%% recoverable file to exact size.\n"
 		"    -P, --parent           Show parent directory\n"
+		"    -A, --ancestors        Show all ancestors as an absolute path\n"
+		"    -r, --recursive RANGE  recover folder inodes with recoverable content recursively\n"
 		"\n"
 		"    -c, --copy RANGE       Write a range of MFT records to a file\n"
 		"\n"
@@ -598,7 +601,7 @@ static int parse_time(const char *value, time_t *since)
  */
 static int parse_options(int argc, char *argv[])
 {
-	static const char *sopt = "-b:Cc:d:fh?i:m:o:OPp:sS:t:TuqvV";
+	static const char *sopt = "-b:Cc:d:fh?i:m:o:OPp:Ar:sS:t:TuqvV";
 	static const struct option lopt[] = {
 		{ "byte",	 required_argument,	NULL, 'b' },
 		{ "case",	 no_argument,		NULL, 'C' },
@@ -613,6 +616,8 @@ static int parse_options(int argc, char *argv[])
 		{ "output",	 required_argument,	NULL, 'o' },
 		{ "parent",	 no_argument,		NULL, 'P' },
 		{ "percentage",  required_argument,	NULL, 'p' },
+		{ "ancestors",	 no_argument,	NULL, 'A' },
+		{ "recursive",	 required_argument,	NULL, 'r' },
 		{ "quiet",	 no_argument,		NULL, 'q' },
 		{ "scan",	 no_argument,		NULL, 's' },
 		{ "size",	 required_argument,	NULL, 'S' },
@@ -739,6 +744,26 @@ static int parse_options(int argc, char *argv[])
 				err++;
 			}
 			break;
+		case 'r':
+			if (!opts.recursive) {
+				opts.recursive++;
+				end = NULL;
+				/* parse inodes */
+				if (parse_inode_arg() == -1)
+					err++;
+				if (end && *end)
+					err++;
+			} else {
+				err++;
+			}
+			break;
+		case 'A':
+			if (!opts.ancestors) {
+				opts.ancestors++;
+			} else {
+				err++;
+			}
+			break;
 		case 'q':
 			opts.quiet++;
 			ntfs_log_clear_levels(NTFS_LOG_LEVEL_QUIET);
@@ -821,7 +846,7 @@ static int parse_options(int argc, char *argv[])
 			if (opts.output || opts.dest || opts.truncate ||
 					(opts.fillbyte != (char)-1)) {
 				ntfs_log_error("Scan can only be used with --percent, "
-					"--match, --ignore-case, --size and --time.\n");
+					"--match, --ancestors, --ignore-case, --size and --time.\n");
 				err++;
 			}
 			if (opts.match_case && !opts.match) {
@@ -913,6 +938,19 @@ static void free_file(struct ufile *file)
 					f->parent_name);
 			free(f->parent_name);
 		}
+
+		for (int idx = 0; idx<130; idx++) {
+			char* ancestor = f->ancestor_names[idx];
+			if (ancestor){
+				ntfs_log_debug(" and ancestorname '%s'", f->ancestor_names[idx]);
+				free(f->ancestor_names[idx]);
+				f->ancestor_names[idx] = NULL;
+			} 
+			if (f->ancestor_ids[idx] == 0){
+				break;
+			}
+		}
+
 		ntfs_log_debug(".\n");
 		free(f);
 	}
@@ -1050,6 +1088,145 @@ static void get_parent_name(struct filename* name, ntfs_volume* vol)
 	}
 
 	return;
+}
+
+
+
+/**
+ * get_ancestor_names - Find the names of a file's ancestors.
+ * 
+ * This helps to make a path for a specific inode 
+ * 
+ * @name:	the filename whose ancestor line and their names to find
+ */
+static void get_ancestor_names(struct filename* name, ntfs_volume* vol)
+{
+	ntfs_attr* mft_data;
+	MFT_RECORD* rec;
+	FILE_NAME_ATTR* filename_attr;
+	long long inode_num;
+
+	if (!name || !vol)
+		return;
+
+	rec = calloc(1, vol->mft_record_size);
+	if (!rec) {
+		ntfs_log_error("ERROR: Couldn't allocate memory in "
+				"get_parent_name()\n");
+		return;
+	}
+
+	mft_data = ntfs_attr_open(vol->mft_ni, AT_DATA, AT_UNNAMED, 0);
+	if (!mft_data) {
+		ntfs_log_perror("ERROR: Couldn't open $MFT/$DATA");
+	} else {
+		int idx = 0;
+		struct filename copyofname = *name;
+		struct filename *tmpname = &copyofname;
+		inode_num = MREF_LE(name->parent_mref);
+
+		while (inode_num && idx < 130) {
+			/* each loop tmpname is the current object 
+			(required is: parent_mref, date_c, namespace)
+			then 
+			
+			 */
+			inode_num = MREF_LE(tmpname->parent_mref);
+
+			/* get rec by id */ 
+			if (ntfs_attr_pread(mft_data, vol->mft_record_size * inode_num,
+						vol->mft_record_size, rec) < 1) {
+				ntfs_log_error("ERROR: Couldn't read MFT Record %lld"
+						".\n", inode_num);
+			} else if ((filename_attr = verify_parent(tmpname, rec))) {
+				if (ntfs_ucstombs(filename_attr->file_name,
+						filename_attr->file_name_length,
+						&tmpname->parent_name, 0) < 0) {
+					ntfs_log_debug("ERROR: Couldn't translate "
+							"filename to current "
+							"locale.\n");
+					tmpname->parent_name = NULL;
+				}else {
+					if (idx > 0 && name->ancestor_ids[idx-1] ==  MREF_LE(tmpname->parent_mref)) {
+						break;
+					} else {
+						/* sucessfully found new parentname */
+						ntfs_log_debug("Found ancestor for \"%s\": <%lld> \"%s\"\n", 
+							tmpname->name, 
+							(long long int)MREF_LE(tmpname->parent_mref), 
+							tmpname->parent_name ? tmpname->parent_name : "<non-determined>");
+						name->ancestor_ids[idx] = tmpname->parent_mref;
+						name->ancestor_names[idx] = tmpname->parent_name;
+
+						tmpname->name = tmpname->parent_name;
+						tmpname->parent_mref = filename_attr->parent_directory;
+						tmpname->name_space = filename_attr->file_name_type;
+						tmpname->date_c = ntfs2timespec(filename_attr->creation_time).tv_sec;
+						idx ++;
+					}
+				}
+			} else {
+				/* no more parents */
+				break;
+			}
+		}
+	}
+
+	if (mft_data) {
+		ntfs_attr_close(mft_data);
+	}
+
+	if (rec) {
+		free(rec);
+	}
+
+	return;
+}
+
+
+/* 
+ *		Make dir with Parents
+ *
+ * mkdir_p creates parents as needed 
+ * found here: https://gist.github.com/JonathonReinhart/8c0d90191c38af2dcadb102c4e202950
+ * original author: JonathonReinhart
+*/
+int mkdir_p(const char *path)
+{
+	/* Adapted from http://stackoverflow.com/a/2336245/119527 */
+	const size_t len = strlen(path);
+	char _path[PATH_MAX];
+	char *p; 
+
+	errno = 0;
+
+	/* Copy string so its mutable */
+	if (len > sizeof(_path)-1) {
+		errno = ENAMETOOLONG;
+		return -1; 
+	}
+	strcpy(_path, path);
+
+	/* Iterate the string */
+	for (p = _path + 1; *p; p++) {
+		if (*p == '/') {
+			/* Temporarily truncate */
+			*p = '\0';
+
+			if (mkdir(_path, S_IRWXU) != 0) {
+				if (errno != EEXIST)
+					return -1; 
+			}
+
+			*p = '/';
+		}
+	}
+
+	if (mkdir(_path, S_IRWXU) != 0) {
+		if (errno != EEXIST)
+			return -1; 
+	}
+	return 0;
 }
 
 /*
@@ -1193,9 +1370,16 @@ static int get_filenames(struct ufile *file, ntfs_volume* vol)
 			get_parent_name(name, vol);
 		}
 
+		if (opts.ancestors || opts.recursive) {
+			name->parent_mref = attr->parent_directory;
+			get_ancestor_names(name, vol);
+		}
+
+
 		if (name->name_space < space) {
 			file->pref_name = name->name;
 			file->pref_pname = name->parent_name;
+			file->ptpref_name = name;
 			space = name->name_space;
 		}
 
@@ -1211,6 +1395,7 @@ static int get_filenames(struct ufile *file, ntfs_volume* vol)
 		if (name) {
 			/* a name was recovered, get missing attributes */
 			file->pref_name = name->name;
+			file->ptpref_name = name;
 			ntfs_attr_reinit_search_ctx(ctx);
 			rec = find_attribute(AT_STANDARD_INFORMATION, ctx);
 			if (rec) {
@@ -1334,7 +1519,7 @@ static int get_data(struct ufile *file, ntfs_volume *vol)
  */
 static struct ufile * read_record(ntfs_volume *vol, long long record)
 {
-	ATTR_RECORD *attr10, *attr20, *attr90;
+	ATTR_RECORD *attr10, *attr20, *attr90, *attrA0, *attrB0;
 	struct ufile *file;
 	ntfs_attr *mft;
 	u32 log_levels;
@@ -1381,10 +1566,12 @@ static struct ufile * read_record(ntfs_volume *vol, long long record)
 	attr10 = find_first_attribute(AT_STANDARD_INFORMATION,	file->mft);
 	attr20 = find_first_attribute(AT_ATTRIBUTE_LIST,	file->mft);
 	attr90 = find_first_attribute(AT_INDEX_ROOT,		file->mft);
+	attrA0 = find_first_attribute(AT_INDEX_ALLOCATION,	file->mft);
+	attrB0 = find_first_attribute(AT_BITMAP,			file->mft);
 
-	ntfs_log_debug("Attributes present: %s %s %s.\n", attr10?"0x10":"",
-			attr20?"0x20":"", attr90?"0x90":"");
-
+	ntfs_log_debug("Attributes present: %s %s %s %s %s.\n", attr10?"0x10":"",
+			attr20?"0x20":"", attr90?"0x90":"", attrA0?"0xA0":"", attrB0?"0xB0":"");
+	
 	if (attr10) {
 		STANDARD_INFORMATION *si;
 		si = (STANDARD_INFORMATION *) ((char *) attr10 + le16_to_cpu(attr10->value_offset));
@@ -1402,6 +1589,7 @@ static struct ufile * read_record(ntfs_volume *vol, long long record)
 	if (get_data(file, vol) < 0) {
 		ntfs_log_error("ERROR: Couldn't get data streams.\n");
 	}
+
 	/* restore errors logging */
 	ntfs_log_set_levels(log_levels);
 
@@ -1595,12 +1783,25 @@ static void dump_record(struct ufile *file)
 		    FILE_ATTR_COMPRESSED | FILE_ATTR_ENCRYPTED))) {
 			ntfs_log_quiet("%s", NONE);
 		}
-
 		ntfs_log_quiet("\n");
 
 		if (opts.parent) {
-			ntfs_log_quiet("Parent: %s\n", f->parent_name ?
-				f->parent_name : "<non-determined>");
+			ntfs_log_quiet("Parent: %s #%lld\n ", f->parent_name ?
+				f->parent_name : "<non-determined>", (long long int)MREF_LE(f->parent_mref));
+		}
+		if (opts.ancestors) {
+			int idx = 0;
+			for (;f->ancestor_ids[idx]; idx++ ); // we search for deepest directory
+
+			ntfs_log_quiet("Path: ");
+			for (idx--; idx >= 0; idx-- ){
+				if (f->ancestor_names[idx]) {
+					ntfs_log_quiet( "%s/", f->ancestor_names[idx]);
+				} else {
+					ntfs_log_quiet("<non-determined#%lld>/", (long long int)MREF_LE(f->parent_mref));
+				}
+			}
+			ntfs_log_quiet("%s\n ", f->name);
 		}
 
 		ntfs_log_quiet("Size alloc: %lld\n", f->size_alloc);
@@ -1724,10 +1925,30 @@ static void list_record(struct ufile *file)
 	else
 		name = NONE;
 
-	ntfs_log_quiet("%-8lld %c%c%c%c   %3d%%  %s %9lld  %s\n",
+	if (opts.ancestors){
+		int idx = 0;
+		ntfs_log_quiet("%-8lld %c%c%c%c   %3d%%  %s %9lld  ", //%s\n",
+			file->inode, flagd, flagr, flagc, flagx,
+			percent, buffer, size);
+		
+		// , name);
+		if (file->ptpref_name){
+			for (;file->ptpref_name->ancestor_ids[idx]; idx++ ); // we search for deepest directory
+			for (idx--; idx >= 0; idx-- ){
+				if (file->ptpref_name->ancestor_names[idx]) {
+					ntfs_log_quiet( "%s/", file->ptpref_name->ancestor_names[idx]);
+				} else {
+					ntfs_log_quiet("<non-determined#%lld>/", (long long int)MREF_LE(file->ptpref_name->parent_mref));
+				}
+			}
+		}
+		ntfs_log_quiet("%s\n", name);
+
+	} else {
+		ntfs_log_quiet("%-8lld %c%c%c%c   %3d%%  %s %9lld  %s\n",
 		file->inode, flagd, flagr, flagc, flagx,
 		percent, buffer, size, name);
-
+	}
 }
 
 /**
@@ -2007,12 +2228,14 @@ static int undelete_file(ntfs_volume *vol, long long inode)
 						(long long)file->inode);
 				name = defname;
 			}
-
+		
+		mkdir_p(opts.dest);
 		create_pathname(opts.dest, name, d->name, pathname, sizeof(pathname));
 		if (d->resident) {
 			fd = open_file(pathname);
 			if (fd < 0) {
-				ntfs_log_perror("Couldn't create file");
+				ntfs_log_perror("Couldn't create file %s",
+						pathname);
 				goto free;
 			}
 
@@ -2041,7 +2264,8 @@ static int undelete_file(ntfs_volume *vol, long long inode)
 
 			fd = open_file(pathname);
 			if (fd < 0) {
-				ntfs_log_perror("Couldn't create output file");
+				ntfs_log_perror("Couldn't create output file %s",
+						pathname);
 				goto free;
 			}
 
@@ -2163,6 +2387,114 @@ free:
 	return result;
 }
 
+
+/* find if this file has a matching ancestor inode */
+int recursive_match(struct ufile* file, char** pbResPath, int relFromMatch){
+
+	if (!file)
+		return 0;
+	range* pRange = NULL;
+	int fFound = 0;
+
+	/* for each range item iterate over every inode */
+	/* loop all given inodes */
+
+	struct ntfs_list_head *item;
+
+	/* for each name of this inode check if it 
+		contains our recursive inode in ancestors array */
+	ntfs_list_for_each(item, &file->name) {
+		struct filename *f = ntfs_list_entry(item, struct filename, list);
+
+		/* now iterate over ancestors of this name */
+		long long anc_inode = 0;
+		long long range_inode = 0;
+		int idxancestor = 0;
+		int rangeidx = 0;
+		do { 
+			// for(anc_inode = f->ancestor_ids[idxancestor]; idxancestor < 130 && anc_inode != 0; idxancestor++)
+			anc_inode = f->ancestor_ids[idxancestor];
+			/* check if we have a match; in all ranges */ 
+			for (rangeidx = 0; anc_inode && rangeidx < nr_entries; rangeidx++) {
+				/* through all inodes in this range */
+				for (range_inode = ranges[rangeidx].begin; range_inode <= ranges[rangeidx].end; range_inode ++) {
+					if (anc_inode == range_inode){
+						/* we have a match */
+						fFound = 1;
+
+						if (pbResPath){
+							char* szPath = calloc(4000,1); // TODO: use MAX_PATH
+							if (szPath)
+							{								
+								char* pbPath = szPath;
+					
+								/*if match: 
+								recusntruct targetpath for this name*/
+								int idx = 0;
+								int rescat = 0;
+
+								if (relFromMatch) {
+									/* start index is from root */
+									idx = idxancestor;
+								} else {
+									/* set start index from matching folder index */
+									for (;f->ancestor_ids[idx]; idx++ ); // we search for deepest directory
+									idx--;
+								}
+								
+								//ntfs_log_quiet("Path: ");
+								for (; idx >= 0; idx-- ){
+									if (f->ancestor_names[idx]) {
+										rescat = sprintf(pbPath, "%s/", f->ancestor_names[idx]);
+										pbPath += rescat;
+										//ntfs_log_quiet( "%s/", f->ancestor_names[idx]);
+										if (pbPath - szPath > 4000){ // TODO: use MAX_PATH
+											//fFound = 0; // path too long 
+											break;
+										}
+									} else {
+										//fFound = 0; // we should not use this path 
+										//1ntfs_log_quiet("<non-determined#%lld>/", (long long int)MREF_LE(f->parent_mref));
+										break;
+									}
+								}
+								//ntfs_log_quiet("%s\n ", f->name);
+								/* return this files target path through parameter */
+								*pbResPath = szPath; 
+							}
+							else {
+								ntfs_log_error("ERROR: Couldn't allocate memory in recursive_match\n");
+								return 0;
+							}
+						}
+
+						/* undeleete this inode in its filename ancestors targetpath */
+						// change undelete target dir to szPath
+						// check if we need to create folder 
+						// undelete 
+						
+						/* and mark for continue to next inode */
+
+
+					}
+					if (fFound) break;
+				}
+				if (fFound) break;
+			}
+			idxancestor++;
+			if (fFound) break;
+		}
+		while (idxancestor < 130 && anc_inode != 0); // TODO: resolve this 130 wisely
+
+		/* TODO: check if correct
+			maybe if we found found this to be a match then we can go to the next file */
+		if (fFound) break;
+
+	}
+	return fFound;
+}
+
+
 /**
  * scan_disk - Search an NTFS volume for files that could be undeleted
  * @vol:  An ntfs volume obtained from ntfs_mount
@@ -2189,6 +2521,8 @@ static int scan_disk(ntfs_volume *vol)
 	int percent;
 	struct ufile *file;
 	regex_t re;
+	char* szDynamicTarget = NULL;
+	char szDynamicAbsTarget[4000] = {0}; // TODO: mak this MAX_PATH
 
 	if (!vol)
 		return -1;
@@ -2257,6 +2591,9 @@ static int scan_disk(ntfs_volume *vol)
 				if (opts.size_end && (opts.size_end < file->max_size))
 					goto skip;
 
+				if (opts.recursive && !recursive_match(file, opts.recursive ? &szDynamicTarget : NULL, 1))
+					goto skip;
+
 				percent = calc_percentage(file, vol);
 				if ((opts.percent == -1) || (percent >= opts.percent)) {
 					if (opts.verbose)
@@ -2267,13 +2604,29 @@ static int scan_disk(ntfs_volume *vol)
 					/* Was -u specified with no inode
 					   so undelete file by regex */
 					if (opts.mode == MODE_UNDELETE) {
+
+						/* we join target path and this files parents */
+						char* backuptarget = opts.dest;
+						strcpy(szDynamicAbsTarget, opts.dest[0]==' '? opts.dest+1:opts.dest);
+						int basedestlen = strlen(szDynamicAbsTarget);
+						strcpy(szDynamicAbsTarget + basedestlen, szDynamicTarget);
+						opts.dest = szDynamicAbsTarget;
+
 						if  (!undelete_file(vol, file->inode))
 							ntfs_log_verbose("ERROR: Failed to undelete "
 								  "inode %lli\n!",
 								  file->inode);
 						ntfs_log_info("\n");
+
+						opts.dest = backuptarget;
 					}
 				}
+
+				if (szDynamicTarget) {
+					free(szDynamicTarget);
+					szDynamicTarget = NULL;
+				}
+				
 				if (((opts.percent == -1) && (percent > 0)) ||
 				    ((opts.percent > 0)  && (percent >= opts.percent))) {
 					results++;
@@ -2409,6 +2762,11 @@ static int handle_undelete(ntfs_volume *vol)
 				ntfs_log_verbose("ERROR: Failed to scan device "
 					"'%s'.\n", opts.device);
 		}
+	} else if (nr_entries != 0 && opts.recursive) {
+		/* scan here for folder inode in every files parent recursive */
+		avoid_duplicate_printing= 1;
+		result = !scan_disk(vol);
+
 	} else {
 		/* Normal undelete by specifying inode(s) */
 		ntfs_log_quiet("Inode    Flags  %%age  Date            Size  Filename\n");
